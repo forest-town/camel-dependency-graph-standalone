@@ -1,0 +1,207 @@
+= Camel CLI - AI Tools
+
+The Camel CLI includes AI-powered commands that use large language models (LLMs)
+to help you understand, troubleshoot, and secure your integrations.
+
+All three commands work with local models (Ollama) or cloud APIs (OpenAI, Anthropic).
+The CLI auto-detects the LLM provider from environment variables or a locally running Ollama instance.
+
+== Ask — chat with a running integration
+
+The `camel ask` command is an AI agent that can inspect and interact with a live Camel process.
+It has access to routes, health checks, metrics, tracing, endpoints, and more — and can
+answer questions about what your integration is doing right now.
+
+[source,bash]
+----
+camel ask "what routes are running?"
+camel ask "why is my route failing?" --name=myApp
+camel ask "are there any blocked exchanges?"
+----
+
+Start an interactive chat session by running without a question:
+
+[source,bash]
+----
+camel ask
+----
+
+This opens a `ask>` prompt where you can have a multi-turn conversation,
+with the AI maintaining context across questions.
+
+=== What the AI can do
+
+The agent has access to tools that let it:
+
+* Inspect the running process — routes, health, endpoints, consumers, properties, inflight/blocked exchanges
+* Read route source code and dump route definitions as YAML or XML
+* Show route structure as a processor tree
+* Find the slowest processors with top statistics
+* Enable, disable, and dump message tracing
+* Start, stop, suspend, and resume individual routes
+* Search the Camel component catalog and read component documentation
+* List and read built-in CLI examples
+* Discover and run any CLI command
+* Read and write files in the current directory
+
+Use `--show-tools` to see tool calls and results as they happen:
+
+[source,bash]
+----
+camel ask "show me the route structure" --show-tools
+----
+
+=== Connecting to a specific process
+
+When multiple Camel processes are running, specify which one to inspect:
+
+[source,bash]
+----
+camel ask "check health" --name=myApp
+camel ask "check health" --name=12345
+----
+
+Without `--name`, the CLI auto-detects when exactly one Camel process is running.
+
+NOTE: The catalog, example, file, and CLI tools work even without a running Camel process.
+
+== Explain — understand a route
+
+The `camel explain` command reads route files from disk and uses an LLM to explain
+what they do — step by step.
+
+[source,bash]
+----
+camel explain hello.yaml
+camel explain my-routes.java --format=markdown
+camel explain route1.yaml route2.xml
+----
+
+Use `--verbose` for detailed technical information, or `--catalog-context` to enrich
+the prompt with Camel component and EIP documentation:
+
+[source,bash]
+----
+camel explain hello.yaml --verbose --catalog-context
+----
+
+TIP: Use `--format=markdown` for structured output with headers, lists, and code blocks.
+
+== Harden — security analysis
+
+The `camel harden` command analyzes route files for security concerns and suggests hardening measures.
+It covers authentication, encryption, secrets management, input validation, secure configuration,
+and logging.
+
+[source,bash]
+----
+camel harden hello.yaml
+camel harden my-routes.java --verbose
+camel harden *.yaml --format=markdown
+----
+
+Findings are prioritized by severity (Critical, High, Medium, Low).
+Use `--catalog-context` to include security-specific notes for each component detected in your routes:
+
+[source,bash]
+----
+camel harden my-routes.yaml --catalog-context
+----
+
+NOTE: `camel harden` currently supports Ollama and OpenAI-compatible APIs only (no Anthropic).
+
+== Choosing an LLM provider
+
+All commands auto-detect the LLM provider. The detection order is:
+
+1. `ANTHROPIC_API_KEY` environment variable → Anthropic API (`ask` and `explain` only)
+2. `CLOUD_ML_REGION` + `ANTHROPIC_VERTEX_PROJECT_ID` → Vertex AI (`ask` and `explain` only)
+3. `AZURE_OPENAI_API_KEY` + `AZURE_OPENAI_ENDPOINT` → Azure OpenAI (uses the `api-key` header; optional `AZURE_OPENAI_DEPLOYMENT_NAME` and `AZURE_OPENAI_API_VERSION`)
+4. `GEMINI_API_KEY` environment variable → Google Gemini native API (`generativelanguage.googleapis.com`). With `--api-type=gemini`, `GOOGLE_API_KEY` is also accepted.
+5. `OPENAI_API_KEY` → OpenAI API (`api.openai.com`)
+6. `LLM_API_KEY` + optional `LLM_BASE_URL` (or `OPENAI_BASE_URL`) → any OpenAI-compatible API
+7. Ollama running via `camel infra` → local Ollama
+8. Ollama at `localhost:11434` → local Ollama
+
+Override with explicit options:
+
+[source,bash]
+----
+camel ask "check health" --api-type=anthropic --api-key=sk-...
+camel ask "check health" --api-type=openai --model=gpt-4
+camel ask "check health" --api-type=gemini --model=gemini-2.0-flash
+camel ask "check health" --api-type=ollama --model=llama3.1
+----
+
+=== Using a local model with Ollama
+
+Install Ollama natively for the best performance — the native binary uses GPU acceleration
+(Metal on macOS, CUDA/ROCm on Linux). Running Ollama through Docker (`camel infra run ollama`)
+bypasses the GPU and makes inference much slower.
+
+[source,bash]
+----
+# macOS
+brew install ollama
+
+# Linux
+curl -fsSL https://ollama.com/install.sh | sh
+
+# Pull a model and start asking
+ollama pull qwen3.6:35b-a3b
+camel ask "what routes are running?"
+----
+
+Ollama at `localhost:11434` is auto-detected — no environment variable needed.
+The CLI checks what models are available and auto-selects a suitable one.
+
+==== Model requirements
+
+`camel ask` and the TUI F8 panel rely on tool calling to inspect your running Camel process.
+Models smaller than ~14B do not reliably invoke tools and answer from training knowledge instead.
+Use at least a 14B model. Prefer a mixture-of-experts model such as `qwen3.6:35b-a3b`: with only
+3B parameters active per token it processes the tool-heavy prompt many times faster than a dense
+27B/32B model, so answers start in seconds instead of a minute.
+
+[options="header"]
+|===
+| Model | RAM (Q4) | Notes
+| `qwen3.6:35b-a3b` | ~23 GB | Recommended: fastest prompt processing, needs 32 GB+
+| `qwen2.5:14b` | ~9 GB | Minimum for 16 GB machines
+| `qwen3.6:27b` | ~18 GB | Strong dense model, several times slower prompt processing
+| `qwen2.5:32b` | ~20 GB | Good quality, slow prompt processing
+| `hermes3:70b` | ~43 GB | Excellent tool calling, needs 64 GB+
+| `llama3.3:70b` | ~43 GB | Best open model, needs 64 GB+
+|===
+
+On Apple Silicon, all RAM is unified — a 64 GB M-series Mac can run `llama3.3:70b` comfortably alongside the OS and other dev tools.
+Use the default (GGUF) tags rather than the `-mlx` tags: the Ollama MLX engine cannot yet reuse the
+cached prompt for Qwen 3.x models, so every question re-processes the whole prompt.
+
+=== Using an OpenAI-compatible local server
+
+Many local LLM servers expose an OpenAI-compatible API. Use `LLM_API_KEY` and `LLM_BASE_URL`
+to point the CLI at any of them:
+
+[source,bash]
+----
+export LLM_API_KEY=any-value      # required but can be any non-empty string
+export LLM_BASE_URL=http://localhost:1234   # your server's base URL
+camel ask "what routes are running?"
+----
+
+`OPENAI_BASE_URL` is accepted as an alternative to `LLM_BASE_URL` (common in other tools).
+
+The first model the server lists on `/v1/models` is used unless `--model` names another one; the
+model must support tool calling.
+
+Common OpenAI-compatible servers:
+
+[options="header"]
+|===
+| Server | Default port | Notes
+| https://lmstudio.ai[LM Studio] | 1234 | GUI app, Mac/Windows/Linux
+| https://github.com/vllm-project/vllm[vLLM] | 8000 | Production-grade, NVIDIA GPU
+| https://github.com/ggerganov/llama.cpp[llama.cpp server] | 8080 | Runs on CPU and GPU
+| https://gpt4all.io[GPT4All] | 4891 | Desktop app
+|===
